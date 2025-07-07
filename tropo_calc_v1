@@ -1,0 +1,219 @@
+# def wmo(obj, varmap = None, lapseC=2.0*units("K/km"), height=False, output_key = "wmo_tropo"):
+#     """
+#     Implements NCAR's Fortran code in python:
+#         https://github.com/NCAR/ncl/blob/develop/ni/src/lib/nfpfort/stattrop_dp.f
+#     """
+
+#     # grab variable names from the yaml or fall back to defaults
+#     #pressure_key = varmap["pres_mod"] if varmap and "pressure" in varmap else "pressure_model"
+#     temperature_key = varmap["temp_mod"] if varmap and "temperature" in varmap else "temperature_k"
+#     sfc_pres_key = varmap["sfc_pres"] if varmap and "pressure" in varmap else "surfpres_pa"
+ 
+#     # input needs to be in xarray 
+#     if not isinstance(obj, xr.Dataset): 
+#         if isinstance(obj, dict):
+#             try: 
+#                 ds = xr.Dataset({k: v for k, v in obj.items() if isinstance(v, (xr.DataArray, np.ndarray))})
+#             except Exception:
+#                 raise TypeError("Input 'obj' must be an xarray.Dataset for multi-dimensional calculation.")
+#         else:
+#             raise TypeError("Input 'obj' must be an xarray.Dataset or a dictionary convertible to one.")
+#     else:
+#         ds = obj 
+
+#     print("DEBUG: Variables available in the Dataset (ds.data_vars):")
+#     for var_name in ds.data_vars:
+#         print(f"  - {var_name}")
+#     print("\nDEBUG: Coordinates available in the Dataset (ds.coords):")
+#     for coord_name in ds.coords:
+#         print(f"  - {coord_name}")
+#     print(f"\nDEBUG: Looking for surface pressure using key: '{sfc_pres_key}'")
+    
+#     #pres = ds[pressure_key]
+#     temp = ds[temperature_key]
+
+#     # debug 
+#     print(f"DEBUG: temp.dims: {temp.dims}")
+#     print(f"DEBUG: temp.shape: {temp.shape}")
+
+#     # vertical dimension name handling. OG fct from Github takes 1D. 
+#     level_dim = None
+#     for dim in temp.dims: # Use temp's dimensions to find the vertical one
+#         if 'level' in dim or 'lev' in dim or 'sigma' in dim or 'eta' in dim or "pfull" in dim or "z" in dim:
+#             level_dim = dim
+#             break
+#     if level_dim is None:
+#         raise ValueError("Could not find a vertical dimension in the input DataArray. "
+#                          "Ensure your pressure/temperature variables have a recognized vertical dimension.")
+
+#     # AK, BK and Surface Pressure for Hybrid Coordinate
+#     try:
+#         ak = ds.attrs['ak'] * units.pascal  # Check units
+#         bk = ds.attrs['bk'] * units.dimensionless # check
+        
+#     except KeyError:
+#         raise ValueError("Could not find 'ak' or 'bk' global attributes in the Dataset. "
+#                          "These are required for hybrid sigma-pressure coordinate calculation.")
+
+#     # Get surface pressure (ps)
+#     if sfc_pres_key not in ds:
+#          raise ValueError(f"Surface pressure variable '{sfc_pres_key}' not found in the dataset. "
+#                           "Please check varmap configuration or variable availability.")
+#     ps = ds[sfc_pres_key] * units.Pa
+    
+#     # print(ak.units)
+#     # print(bk.units)
+#     # print(ps.metpy.units)
+
+#     print("temp.dims:", temp.dims)
+#     print("temp.shape:", temp.shape)
+
+#     # Assume ak and bk are 1D arrays of length n_levels
+#     ak = np.array(ds.attrs['ak']) * units.pascal
+#     bk = np.array(ds.attrs['bk']) * units.dimensionless
+    
+#     # Expand ak and bk to match ps shape
+#     ak_3d = xr.DataArray(ak, dims=[level_dim])
+#     bk_3d = xr.DataArray(bk, dims=[level_dim])
+    
+#     # Broadcast to match ps shape
+#     ps_expanded = ps.expand_dims({level_dim: ak.size}).transpose(..., level_dim)
+    
+#     # Compute pressure at each level
+#     p_half = ak_3d + bk_3d * ps_expanded  # shape: (65, time, y, x)
+    
+#     # Compute full-level pressures by averaging adjacent half-levels
+#     p_full = 0.5 * (p_half.isel({level_dim: slice(0, -1)}) + p_half.isel({level_dim: slice(1, None)}))  # shape: (64, time, y, x)
+    
+#     # Transpose to match temp's dimension order
+#     pres_calculated = p_full.transpose(*temp.dims)
+
+#     print("pres_calculated.dims:", pres_calculated.dims)
+#     print("pres_calculated.shape:", pres_calculated.shape)
+
+#     # pull in the preexisting github code 
+#     def _calculate_wmo_profile(pFull_np, TFull_np, lapseC_val, height_output_bool):
+#         # Re-attach units for internal MetPy calculations
+#         pFull = pFull_np * pres.metpy.units
+#         TFull = TFull_np * temp.metpy.units
+
+#         nLev = pFull.size
+#         nLevm = nLev - 1
+
+#         if nLevm < 2: # Need at least 2 levels for lapse rate calculation
+#             return np.nan 
+
+#         pMin = 85.0 * units.mbar
+#         pMax = 450.0 * units.mbar
+
+#         dZ = 2000.0 * units.meters
+
+#         g = earth_gravity
+#         R = dry_air_gas_constant
+
+#         const = g / R
+
+#         found = False
+
+#         lapse = np.zeros(nLevm) * units.kelvin / units.km
+#         pHalf = np.zeros(nLevm) * units.mbar
+        
+#         # Calculate lapse rates and half pressures
+#         for iLev in range(0, nLevm):
+#             # Checking for division by 0
+#             if pFull[iLev+1].magnitude <= 0 or TFull[iLev+1].magnitude <= 0:
+#                 lapse[iLev] = np.nan * units.kelvin / units.km
+#             else:
+#                 lapse[iLev] = const * np.log(TFull[iLev] / TFull[iLev+1]) / np.log(pFull[iLev] / pFull[iLev+1])
+#             pHalf[iLev] = (pFull[iLev] + pFull[iLev+1]) * 0.5
+
+#         pTrop = np.nan * units.mbar 
+
+#         # Find tropopause
+#         iTrop = -1 
+#         for iLev in range(0, nLevm - 1): 
+#             if lapse[iLev] < lapseC and pFull[iLev] < pMax and not found:
+#                 P1 = np.log(pHalf[iLev].magnitude)
+#                 P2 = np.log(pHalf[iLev+1].magnitude)
+
+#                 if (lapse[iLev] != lapse[iLev+1]):
+#                     # Check for division by zero
+#                     if (lapse[iLev+1] - lapse[iLev]).magnitude == 0:
+#                          pTrop_candidate = pHalf[iLev] # Fallback
+#                     else:
+#                         weight = (lapseC - lapse[iLev]) / (lapse[iLev+1] - lapse[iLev])
+#                         # tropopause pressure
+#                         pTrop_candidate = np.exp(P1 + weight * (P2 - P1)) * units.mbar
+#                 else:
+#                     pTrop_candidate = pHalf[iLev]
+
+#                 p2km = pTrop_candidate * np.exp(-dZ * const / TFull[iLev]) # Using TFull[iLev] as reference
+#                 lapseAvg = 0 * units.kelvin / units.km
+#                 lapseSum = 0 * units.kelvin / units.km
+#                 kount = 0
+
+#                 for L in range(iLev, nLevm):
+#                     if pHalf[L].magnitude > p2km.magnitude and not np.isnan(lapse[L].magnitude):
+#                         lapseSum += lapse[L]
+#                         kount += 1
+                
+#                 if kount > 0:
+#                     lapseAvg = lapseSum / kount
+#                 else:
+#                     lapseAvg = np.inf * units.kelvin / units.km # If no points found, effectively fails criterion
+
+#                 found = lapseAvg < lapseC
+
+#                 if found:
+#                     iTrop = iLev
+#                     pTrop = pTrop_candidate
+#                     pTrop = pMin if pTrop < pMin else pTrop
+#                     break
+        
+#         # If no tropopause found after loop nan
+#         if iTrop == -1:
+#             return np.nan
+
+#         # Return height or pressure
+#         if height_output_bool:
+#             if iTrop >= 0:
+#                 if iTrop == 0: # If tropopause is at the surface, height is 0
+#                     z = 0.0 * units.km
+#                 else:
+#                     z = thickness_hydrostatic(pFull[0:iTrop+1], TFull[0:iTrop+1]) # Adjusted slicing
+#                 return z.to(units.km).magnitude
+#             else:
+#                 return np.nan
+#         else:
+#             return pTrop.to(units.mbar).magnitude
+
+#     tropopause_da = xr.apply_ufunc(
+#         _calculate_wmo_profile,
+#         pres_calculated.metpy.quantify(), 
+#         temp.metpy.quantify(), 
+#         lapseC,                
+#         height,                 
+#         input_core_dims=[[level_dim], [level_dim], [], []], 
+#         output_core_dims=[[]], 
+#         exclude_dims={level_dim}, 
+#         dask='parallelized',    
+#         output_dtypes=[float],  
+#         dask_gufunc_kwargs=dict(allow_rechunk=True),
+#     )
+
+#     # Fill array with attributesDataArray
+#     if height:
+#         tropopause_da.attrs['units'] = 'km'
+#         tropopause_da.name = f'{output_key}_height'
+#         tropopause_da = tropopause_da * units.km # Attach units to the DataArray
+#     else:
+#         tropopause_da.attrs['units'] = 'mbar'
+#         tropopause_da.name = f'{output_key}_pressure'
+#         tropopause_da = tropopause_da * units.mbar # Attach units to the DataArray
+
+#     tropopause_da = tropopause_da.assign_coords({d: ds[d] for d in tropopause_da.dims})
+
+#     ds[output_key] = tropopause_da.metpy.dequantify() 
+
+#     return ds
+
