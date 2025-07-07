@@ -217,3 +217,298 @@
 
 #     return ds
 
+
+# def wmo(obj, varmap = None, lapseC=2.0*units("K/km"), height=False, output_key = "wmo_tropo"):
+#     """
+#     Implements NCAR's Fortran code in python:
+#         https://github.com/NCAR/ncl/blob/develop/ni/src/lib/nfpfort/stattrop_dp.f
+#     """
+
+#     temperature_key = varmap["temp_mod"] if varmap and "temperature" in varmap else "temperature_k"
+#     sfc_pres_key = varmap["sfc_pres"] if varmap and "pressure" in varmap else "pressure_model" # pres pa mid
+    
+#     if not isinstance(obj, xr.Dataset): 
+#         if isinstance(obj, dict):
+#             try: 
+#                 ds = xr.Dataset({k: v for k, v in obj.items() if isinstance(v, (xr.DataArray, np.ndarray))})
+#             except Exception:
+#                 raise TypeError("Input 'obj' must be an xarray.Dataset for multi-dimensional calculation.")
+#         else:
+#             raise TypeError("Input 'obj' must be an xarray.Dataset or a dictionary convertible to one.")
+#     else:
+#         ds = obj 
+
+#     print("DEBUG: Variables available in the Dataset (ds.data_vars):")
+#     for var_name in ds.data_vars:
+#         print(f"  - {var_name}")
+#     print("\nDEBUG: Coordinates available in the Dataset (ds.coords):")
+#     for coord_name in ds.coords:
+#         print(f"  - {coord_name}")
+#     print(f"\nDEBUG: Looking for surface pressure using key: '{sfc_pres_key}'")
+    
+#     temp = ds[temperature_key]
+
+#     print(f"DEBUG: temp.dims: {temp.dims}")
+#     print(f"DEBUG: temp.shape: {temp.shape}")
+
+#     level_dim = None
+#     for dim in temp.dims:
+#         if 'level' in dim or 'lev' in dim or 'sigma' in dim or 'eta' in dim or "pfull" in dim or "z" in dim:
+#             level_dim = dim
+#             break
+#     if level_dim is None:
+#         raise ValueError("Could not find a vertical dimension in the input DataArray. "
+#                          "Ensure your pressure/temperature variables have a recognized vertical dimension.")
+
+#     print(f"DEBUG: Identified vertical dimension: '{level_dim}'")
+#     print(f"DEBUG: Length of '{level_dim}' in temp: {len(temp[level_dim])}")
+
+#     n_data_levels = len(temp[level_dim]) # This is 64
+
+#     # AK, BK and Surface Pressure for Hybrid Coordinate
+#     try: 
+#         ak_attr_raw = ds.attrs['ak']
+#         bk_attr_raw = ds.attrs['bk']
+#     except KeyError:
+#         raise ValueError("Could not find 'ak' or 'bk' global attributes in the Dataset. "
+#                          "These are required for hybrid sigma-pressure coordinate calculation.")
+
+#     ak_attr_len = len(ak_attr_raw)
+#     bk_attr_len = len(bk_attr_raw)
+
+#     print(f"DEBUG: Raw ak attribute length: {ak_attr_len}")
+#     print(f"DEBUG: Raw bk attribute length: {bk_attr_len}")
+
+#     if ak_attr_len != bk_attr_len:
+#         raise ValueError(f"Lengths of 'ak' ({ak_attr_len}) and 'bk' ({bk_attr_len}) attributes do not match.")
+
+#     n_sigma_levels = ak_attr_len 
+    
+#     if sfc_pres_key not in ds:
+#         raise ValueError(f"Surface pressure variable '{sfc_pres_key}' not found in the dataset. "
+#                          "Please check varmap configuration or variable availability.")
+#     ps = ds[sfc_pres_key].metpy.quantify() 
+
+#     # Use xarray's broadcasting for ak and bk, which are 1D arrays
+#     ak_da = xr.DataArray(ak_attr_raw, dims=[level_dim]) * units.pascal # Directly assign level_dim
+#     bk_da = xr.DataArray(bk_attr_raw, dims=[level_dim]) * units.dimensionless # Directly assign level_dim
+    
+#     sigma_interface_dim = f'{level_dim}_sigma_interface' if n_sigma_levels != n_data_levels else level_dim
+
+#     ak_da_for_sigma = xr.DataArray(ak_attr_raw, dims=[sigma_interface_dim]).metpy.quantify()
+#     bk_da_for_sigma = xr.DataArray(bk_attr_raw, dims=[sigma_interface_dim]).metpy.quantify()
+
+#     sigma_coord = xr.DataArray(np.linspace(0, 1, n_sigma_levels), dims=[sigma_interface_dim])
+
+#     pres_sigma_levels_raw = xr.apply_ufunc(
+#         sigma_to_pressure,
+#         sigma_coord.metpy.quantify(),
+#         ps,                            
+#         ak_da_for_sigma,                         
+#         bk_da_for_sigma,                         
+#         input_core_dims=[[sigma_interface_dim], [], [sigma_interface_dim], [sigma_interface_dim]],
+#         output_core_dims=[[sigma_interface_dim]],
+#         exclude_dims=set(),
+#         dask='parallelized',
+#         output_dtypes=[float],
+#         dask_gufunc_kwargs=dict(allow_rechunk=True),
+#     )
+
+#     print(f"DEBUG: pres_sigma_levels_raw dimensions: {pres_sigma_levels_raw.dims}, shape: {pres_sigma_levels_raw.shape}")
+
+#     if n_sigma_levels == n_data_levels + 1:
+#         pres_calculated_interim = (pres_sigma_levels_raw.isel({sigma_interface_dim: slice(0, -1)}) +
+#                                    pres_sigma_levels_raw.isel({sigma_interface_dim: slice(1, None)})) / 2
+        
+#         pres_calculated = pres_calculated_interim.rename({sigma_interface_dim: level_dim})
+#         pres_calculated = pres_calculated.assign_coords({level_dim: temp[level_dim]})
+
+#     elif n_sigma_levels == n_data_levels:
+#         # ensure dimension name is correct and assign coordinate
+#         if sigma_interface_dim != level_dim:
+#             pres_calculated_interim = pres_sigma_levels_raw.rename({sigma_interface_dim: level_dim})
+#         else:
+#             pres_calculated_interim = pres_sigma_levels_raw
+#         pres_calculated = pres_calculated_interim.assign_coords({level_dim: temp[level_dim]})
+#     else:
+#         raise ValueError(f"Unsupported mismatch: ak/bk levels ({n_sigma_levels}) vs. data levels ({n_data_levels}). "
+#                          "Expected n_levels or n_levels+1 for sigma coefficients.")
+
+#     print(f"DEBUG: Final pres_calculated dimensions: {pres_calculated.dims}, shape: {pres_calculated.shape}")
+    
+#     target_chunks_dict_for_time_yx_z = {
+#         'time': temp.sizes['time'],
+#         'y': temp.sizes['y'],      
+#         'x': temp.sizes['x'],      
+#         'z': temp.sizes['z']      
+#     }
+
+#     # Rechunk temp 
+#     if isinstance(temp.data, dask.array.Array):
+#         temp = temp.chunk(target_chunks_dict_for_time_yx_z)
+#         print(f"DEBUG: Rechunked temp to: {temp.chunks}")
+#     else:
+#         pass 
+
+#     # Rechunk pres_calculated 
+#     if isinstance(pres_calculated.data, dask.array.Array):
+#         pres_calculated = pres_calculated.chunk(target_chunks_dict_for_time_yx_z)
+#         print(f"DEBUG: Rechunked pres_calculated to: {pres_calculated.chunks}")
+#     else:
+#         pass 
+
+#     def _calculate_wmo_profile(pFull_np, TFull_np, lapseC_val, height_output_bool):
+#         pFull = pFull_np * pres_calculated.metpy.units
+#         TFull = TFull_np * temp.metpy.units
+
+#         nLev = pFull.size
+#         nLevm = nLev - 1
+
+#         if nLevm < 2:
+#             return np.nan 
+
+#         pMin = 85.0 * units.mbar
+#         pMax = 450.0 * units.mbar
+
+#         dZ = 2000.0 * units.meters
+
+#         g = earth_gravity
+#         R = dry_air_gas_constant
+
+#         const = g / R
+
+#         found = False
+
+#         lapse = np.zeros(nLevm) * units.kelvin / units.km
+#         pHalf = np.zeros(nLevm) * units.mbar
+        
+#         for iLev in range(0, nLevm):
+#             if pFull[iLev+1].magnitude <= 0 or TFull[iLev+1].magnitude <= 0:
+#                 lapse[iLev] = np.nan * units.kelvin / units.km
+#             else:
+#                 lapse[iLev] = const * (np.log(TFull[iLev].to(units.K).magnitude / TFull[iLev+1].to(units.K).magnitude)) / \
+#                               (np.log(pFull[iLev].to(units.Pa).magnitude / pFull[iLev+1].to(units.Pa).magnitude))
+#                 lapse[iLev] = lapse[iLev].to(units.kelvin/units.km)
+#             pHalf[iLev] = (pFull[iLev] + pFull[iLev+1]) * 0.5
+
+#         pTrop = np.nan * units.mbar 
+
+#         iTrop = -1 
+#         for iLev in range(0, nLevm - 1): 
+#             if lapse[iLev].to(lapseC.units).magnitude < lapseC.magnitude and pFull[iLev] < pMax and not found:
+#                 P1 = np.log(pHalf[iLev].to(units.mbar).magnitude)
+#                 P2 = np.log(pHalf[iLev+1].to(units.mbar).magnitude)
+
+#                 if (lapse[iLev].magnitude != lapse[iLev+1].magnitude):
+#                     if (lapse[iLev+1] - lapse[iLev]).magnitude == 0:
+#                         pTrop_candidate = pHalf[iLev]
+#                     else:
+#                         weight = (lapseC.magnitude - lapse[iLev].magnitude) / (lapse[iLev+1].magnitude - lapse[iLev].magnitude)
+#                         pTrop_candidate = np.exp(P1 + weight * (P2 - P1)) * units.mbar
+#                 else:
+#                     pTrop_candidate = pHalf[iLev]
+
+#                 p2km = pTrop_candidate.to(units.Pa) * np.exp(-dZ * const / TFull[iLev].to(units.K)) 
+                
+#                 lapseAvg = 0 * units.kelvin / units.km
+#                 lapseSum = 0 * units.kelvin / units.km
+#                 kount = 0
+
+#                 for L in range(iLev, nLevm):
+#                     if pHalf[L].magnitude > p2km.to(units.mbar).magnitude and not np.isnan(lapse[L].magnitude):
+#                         lapseSum += lapse[L]
+#                         kount += 1
+                
+#                 if kount > 0:
+#                     lapseAvg = lapseSum / kount
+#                 else:
+#                     lapseAvg = np.inf * units.kelvin / units.km
+
+#                 found = lapseAvg.to(lapseC.units).magnitude < lapseC.magnitude
+
+#                 if found:
+#                     iTrop = iLev
+#                     pTrop = pTrop_candidate
+#                     pTrop = pMin if pTrop < pMin else pTrop
+#                     break
+        
+#         if iTrop == -1:
+#             return np.nan
+
+#         if height_output_bool:
+#             if iTrop >= 0:
+#                 if iTrop == 0:
+#                     z = 0.0 * units.km
+#                 else:
+#                     heights_at_levels = np.zeros_like(pFull_np.magnitude) * units.meters
+#                     heights_at_levels[-1] = 0.0 * units.meters
+
+#                     for k in range(nLevm - 1, -1, -1):
+#                         delta_z = thickness_hydrostatic(pFull[k+1], pFull[k], (TFull[k+1] + TFull[k])/2)
+#                         heights_at_levels[k] = heights_at_levels[k+1] + delta_z
+                    
+#                     sorted_indices = np.argsort(pFull.magnitude)
+#                     sorted_p = pFull.magnitude[sorted_indices]
+#                     sorted_h = heights_at_levels.magnitude[sorted_indices]
+
+#                     interp_height = np.interp(np.log(pTrop.to(units.Pa).magnitude), np.log(sorted_p), sorted_h) * units.meters
+#                     z = interp_height
+                
+#                 return z.to(units.km).magnitude
+#             else:
+#                 return np.nan
+#         else:
+#             return pTrop.to(units.mbar).magnitude
+
+#     tropopause_da = xr.apply_ufunc(
+#         _calculate_wmo_profile,
+#         pres_calculated.metpy.quantify(),
+#         temp.metpy.quantify(),
+#         lapseC,                    
+#         height,                    
+#         input_core_dims=[[level_dim], [level_dim], [], []],  
+#         output_core_dims=[[]],  
+#         exclude_dims={level_dim},  
+#         dask='parallelized',    
+#         output_dtypes=[float],  
+#         dask_gufunc_kwargs=dict(allow_rechunk=True),
+#     )
+
+#     if height:
+#         tropopause_da.attrs['units'] = 'km'
+#         tropopause_da.name = f'{output_key}_height'
+#         tropopause_da = tropopause_da * units.km
+#     else:
+#         tropopause_da.attrs['units'] = 'mbar'
+#         tropopause_da.name = f'{output_key}_pressure'
+#         tropopause_da = tropopause_da * units.mbar
+
+#     print(f"DEBUG: tropopause_da.dims before final assign_coords: {tropopause_da.dims}")
+#     for d in tropopause_da.dims:
+#         if d in ds.coords: # Check if it's in ds.coords
+#             print(f"DEBUG: ds['{d}'] dimensions: {ds[d].dims}, shape: {ds[d].shape}")
+#         elif d in ds.dims: # Also check if it's a dimension (which implies it should be a coordinate)
+#             print(f"DEBUG: ds['{d}'] (from ds.dims) dimensions: {ds[d].dims}, shape: {ds[d].shape}")
+#         else:
+#             print(f"DEBUG: Warning: Dimension '{d}' in tropopause_da.dims not found as a coordinate or dimension in ds.")
+
+#     coords_to_assign = {}
+#     for dim_name in tropopause_da.dims:
+#         # Check if dim_name is a dimension in the original dataset (which should imply a coordinate exists for it)
+#         if dim_name in ds.dims: 
+#             coord_da = ds[dim_name] # Access via ds[dim_name] to get the dimension coordinate
+#             # Check if the coordinate is a simple 1D coordinate matching its dimension name and length
+#             if coord_da.ndim == 1 and coord_da.dims[0] == dim_name and len(coord_da) == len(tropopause_da[dim_name]):
+#                 coords_to_assign[dim_name] = coord_da
+#             else:
+#                 print(f"DEBUG: Skipping '{dim_name}' coordinate assignment: ds['{dim_name}'] has unexpected dimensions/shape "
+#                       f"{coord_da.dims}, {coord_da.shape} or length mismatch.")
+#         else:
+#             print(f"DEBUG: Warning: Dimension '{dim_name}' in tropopause_da.dims not found as a dimension in ds. Skipping coordinate assignment.")
+
+#     tropopause_da = tropopause_da.assign_coords(coords_to_assign)
+
+#     ds[output_key] = tropopause_da.metpy.dequantify() 
+
+#     return ds
+    
