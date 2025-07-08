@@ -1,0 +1,92 @@
+# def ptemp(obj, varmap = None, output_key = "ptemp_mod"):
+#     # grab variable names from the yaml or fall back to defaults
+#     pressure_key = varmap["pres_mod"] if varmap and "pressure" in varmap else "pressure_model"
+#     temperature_key = varmap["temp_mod"] if varmap and "temperature" in varmap else "temperature_k"
+
+#     pres = obj[pressure_key]
+#     temp = obj[temperature_key]
+
+#     ptmp = (metpy.calc.potential_temperature(
+#         pres * units.Pa,
+#         temp * units("K")
+#     )).metpy.convert_units("K")
+
+#     #print(ptmp)
+#     ptmp_np = ptmp.astype("float64").values
+
+#     # DEBUG
+#     # make sure this is gen enough
+#     # print("pressure dims:", pres.dims)
+#     # print("temp dims:", temp.dims)
+#     # print("ptmp shape:", ptmp_np.shape)
+
+#     # fix is needed in order to work with vert plots. Check dimensions before proceeding. 
+#     if hasattr(obj, "coords") and hasattr(obj, "dims"):
+#         # Use pressure dims if number of dims matches dpt_np
+#         if len(pres.dims) == ptmp_np.ndim:
+#             dims_to_use = pres.dims
+#         # use 4d case for vert plots
+#         elif len(temp.dims) == ptmp_np.ndim:
+#             dims_to_use = temp.dims
+#         else:
+#             raise ValueError(
+#                 f"No matching dims for output: pressure.dims={pres.dims}, "
+#                 f"temp.dims={temp.dims}, ptmp_np.shape={ptmp_np.shape}"
+#             )
+
+#         obj[output_key] = (dims_to_use, ptmp_np)
+#         obj[output_key].attrs["units"] = "K"
+#         return obj
+        
+#     elif isinstance(obj, dict):
+#         obj[output_key] = ptmp_np
+#         return obj
+#     else:
+#         return ptmp_np
+
+# # calc observed potential temperature
+# def ptemp_obs(obj, varmap = None, output_key = "ptemp_obs"):
+#     # grab variable names from the yaml or fall back to defaults
+#     pressure_key = varmap["pres_obs"] if varmap and "pressure" in varmap else "pressure_obs"
+#     temperature_key = varmap["temp_obs"] if varmap and "temperature" in varmap else "temperature_C"
+
+#     pres = obj[pressure_key]
+#     temp = obj[temperature_key]
+
+#     ptmp = (metpy.calc.potential_temperature(
+#         pres * units.Pa,
+#         temp * units("K")
+#     )).metpy.convert_units("K")
+
+#     #print(ptmp)
+#     ptmp_np = ptmp.astype("float64").values
+
+#     # DEBUG
+#     # make sure this is gen enough
+#     # print("pressure dims:", pres.dims)
+#     # print("temp dims:", temp.dims)
+#     # print("ptmp shape:", ptmp_np.shape)
+
+#     # fix is needed in order to work with vert plots. Check dimensions before proceeding. 
+#     if hasattr(obj, "coords") and hasattr(obj, "dims"):
+#         # Use pressure dims if number of dims matches dpt_np
+#         if len(pres.dims) == ptmp_np.ndim:
+#             dims_to_use = pres.dims
+#         # use 4d case for vert plots
+#         elif len(temp.dims) == ptmp_np.ndim:
+#             dims_to_use = temp.dims
+#         else:
+#             raise ValueError(
+#                 f"No matching dims for output: pressure.dims={pres.dims}, "
+#                 f"temp.dims={temp.dims}, ptmp_np.shape={ptmp_np.shape}"
+#             )
+
+#         obj[output_key] = (dims_to_use, ptmp_np)
+#         obj[output_key].attrs["units"] = "K"
+#         return obj
+        
+#     elif isinstance(obj, dict):
+#         obj[output_key] = ptmp_np
+#         return obj
+#     else:
+#         return ptmp_np
