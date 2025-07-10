@@ -90,3 +90,150 @@
 #         return obj
 #     else:
 #         return ptmp_np
+
+#######
+# this code has to move out of the metcalc file
+    # # smoothing function
+    from scipy.ndimage import uniform_filter1d
+    
+    # need to fix some units
+    # print the top of the boundary layer
+    # if hasattr(pres, "dims") and len(pres.dims) == 1:
+    # # Convert pressure to height if needed
+
+    if hasattr(pres, "dims") and len(pres.dims) == 1:
+        print(f"Pressure range: {pres.min().values:.1f} Pa to {pres.max().values:.1f} Pa")
+
+        try:
+            # Sort pressure in descending order
+            sort_idx = np.argsort(pres)[::-1]
+            pres_sorted = pres.values[sort_idx]
+            ptmp_sorted = ptmp_np[sort_idx]
+    
+            # Convert pressure to height
+            #height = metpy.calc.pressure_to_height_std(pres_sorted * units.Pa).to("meter")
+            # height key derived from the obs sonde data 
+            height_key = varmap.get("height", None)
+
+            try:
+                if height_key:
+                    height = obj[height_key]
+                    height = height.values[sort_idx]
+                    height = height * units.meter  
+                    print("Sample height values:", height[:5])
+                else:
+                    raise KeyError
+            except (KeyError, AttributeError):
+                print("Height from observed sounding not provided. CAUTION: Boundary layer height calc assumes standard atmospheric conditions. See: metpy.calc.pressure_to_height_std()")
+                height = metpy.calc.pressure_to_height_std(pres_sorted * units.Pa).to("meter")
+
+            #height = obj[height_key]
+            #height = height.values[sort_idx]    
+
+            # Ensure height increases with index
+            if height[0] > height[-1]:
+                height = height[::-1]
+                ptmp_sorted = ptmp_sorted[::-1]
+
+            # for h, t in zip(height, ptmp_sorted):
+            #     print(f"Height: {h:.0f} m, θ: {t:.2f} K")
+    
+            # need to limit this test to the lower atmosphere. otherwise we get values in the strato
+            max_blh = 100000 * units.meter
+            valid_range = height < max_blh
+            height = height[valid_range]
+            ptmp_sorted = ptmp_sorted[valid_range]
+            pres_sorted = pres_sorted[valid_range]
+
+            print("Top of profile:")
+            print(f"Pressure: {pres_sorted[:5]}")
+            print(f"Height: {height[:5]}")
+            
+            print(f"Height units: {height.units}")
+            print(f"Height range: {height.min():.2f} to {height.max():.2f}")
+
+            # Apply smoothing to potential temperature
+            smooth_span = 5  
+            ptmp_smoothed = uniform_filter1d(ptmp_sorted, size=smooth_span)
+    
+            # Compute vertical gradient of smoothed potential temperature
+            dtheta_dz = metpy.calc.first_derivative(ptmp_smoothed * units.K, 
+                                                    x=height)
+
+            print(f"Gradient length: {len(dtheta_dz)}, Height length: {len(height)}")
+
+            # stable layer calc. 
+            stable_layer = dtheta_dz > 0 * units("K/m")
+
+            if np.any(stable_layer):
+                idx_start = np.where(stable_layer)[0][0]
+                idx_end = np.where(~stable_layer[idx_start:])[0]
+                idx_end = idx_start + idx_end[0] if idx_end.size > 0 else len(height) - 1
+        
+                blh = height[idx_start]
+                blp = pres_sorted[idx_start] * units.Pa
+                blp_top = pres_sorted[idx_end] * units.Pa
+        
+                # Integrate stable layer depth
+                stable_depth = height[idx_end] - height[idx_start]
+        
+                print(f"Boundary Layer Height ≈ {blh.to('km'):.2f}")
+                print(f"Pressure at BLH base ≈ {blp.to('hPa'):.1f}")
+                print(f"Pressure at BLH top  ≈ {blp_top.to('hPa'):.1f}")
+                print(f"dθ/dz at index {idx_start} ≈ {dtheta_dz[idx_start].to('K/km'):.4f}")
+                print(f"Stable Layer Depth ≈ {stable_depth.to('m'):.0f}")
+
+                for h, grad in zip(height, dtheta_dz):
+                    print(f"Height: {h:.0f} m, dθ/dz: {grad.to('K/km'):.3f}")
+
+                # plot for sanity 
+                import matplotlib.pyplot as plt
+    
+                fig, ax1 = plt.subplots(figsize=(6, 8))
+                blh_meters = blh.to('meter').magnitude
+                    
+                # Plot potential temperature
+                color1 = 'tab:blue'
+                ax1.set_xlabel("θ (K)")
+                ax1.set_ylabel("Height (m)")
+                ax1.plot(ptmp_smoothed, height, color=color1, label='Smoothed θ')
+                ax1.tick_params(axis='x', labelcolor=color1)
+                #ax1.invert_yaxis()  # Higher heights on top
+                ax1.grid(True)
+                ax1.set_title("Potential Temperature and Vertical Gradient")
+                
+                # Twin axis to plot gradient
+                ax2 = ax1.twiny()
+                
+                color2 = 'tab:red'
+                ax2.set_xlabel("dθ/dz (K/km)")
+                ax2.plot(dtheta_dz.to('K/km'), height, color=color2, linestyle='--', label='dθ/dz')
+                ax2.tick_params(axis='x', labelcolor=color2)
+                
+                # Add a vertical line at 0 gradient
+                ax2.axvline(0, color='gray', linestyle=':', linewidth=1)
+    
+                ax1.axhline(blh_meters, color='green', linestyle='-', linewidth=2, label='BLH')
+                
+                ax1.annotate(f'BLH ≈ {blh.to("km").magnitude:.2f} km',
+                             xy=(ptmp_smoothed[0], blh_meters),
+                             xytext=(10, -20),
+                             textcoords='offset points',
+                             arrowprops=dict(arrowstyle="->", color='green'),
+                             color='green',
+                             fontsize=9)
+    
+                # Add legends
+                lines1, labels1 = ax1.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax1.legend(lines1 + lines2, labels1 + labels2, loc='lower right')
+                
+                plt.tight_layout()
+                plt.show()
+                
+            else:
+                print("No stable layer detected (dθ/dz > 0)")
+    
+        except Exception as e:
+            print(f"Error during BLH calculation: {e}")
+
